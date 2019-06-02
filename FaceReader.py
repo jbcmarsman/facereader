@@ -1,5 +1,6 @@
 import mysql.connector as mariadb
 import os
+import numpy as np
 import pprint
 #import cv2
 
@@ -23,12 +24,13 @@ class FaceReader:
 
     verbosity = False
 
-    def __init__(self):
+    model = {}
     
-        print "Constructed"
+    def __init__(self):
+        
         self.connect()
-        print "Connected"            
-
+        self.load_models()
+        
     def __del__(self):
     
         self.disconnect()
@@ -66,14 +68,16 @@ class FaceReader:
     
 
     def process_queue(self):
-        photo_queue = Table('photo_queue')
-        q = Query.from_(photo_queue).select(photo_queue.filename).limit(1)
+        pq = Table('photo_queue')
+        q = Query.from_(pq).select(pq.filename).where(pq.filename.like('%DSC_0087%'))
+        print(str(q))
         
         self.cursor.execute(str(q))
-        res = self.cursor.fetchone()
-        
+        res = self.cursor.fetchall()        
 
-        self.detect_faces(res[0])
+        for row in res:
+            filename = row[0]
+            self.detect_faces(filename)
 
     def get_label_idx(self, label):
         ml = Table("model_labels")
@@ -126,29 +130,28 @@ class FaceReader:
                     self.connection.commit()
 
     def load_models(self):
+        print("Loading models...")
         ml = Table("model_labels")
         pm = Table("photo_models")
         
         q = Query.from_(ml).select(ml.idx, ml.label)
         self.cursor.execute(str(q))
         res = self.cursor.fetchall()
-
-        model = {}
         
         for row in res:
             label_idx = row[0]
             label = row[1]
                 
-            model[label] = []
+            self.model[label] = []
             nq = Query.from_(pm).select(pm.encoding,pm.weight).where(pm.label_idx == label_idx)
             self.cursor.execute(str(nq))
             nres = self.cursor.fetchall()
             for row in nres:
-                model[label].append({ 'encoding' : row[0], 'weight' : row[1]})
-
-
-        pprint.pprint(model)
                 
+                enc_str = np.array(str(row[0]).replace('[','').replace(']','').split())
+                encoding = enc_str.astype(np.float)
+                self.model[label].append({ 'encoding' : encoding, 'weight' : row[1]})
+                        
     def build_model(self):
         for (r,d,f) in os.walk(self.model_path):
             for file in f:
@@ -156,9 +159,42 @@ class FaceReader:
                     label = os.path.basename(r)
                     self.process_model_photo(os.path.join(r,file), label)
         
+
+    def process_queue(self):
+        pq = Table("photo_queue")
         
+        q = Query.from_(pq).select(pq.filename).where(pq.filename.like('%DSC_00%'))
+        
+        self.cursor.execute(str(q))
+        res = self.cursor.fetchall()
+
+        enc_mat = []
+        for item in self.model.keys():
+            for d in self.model[item]:
+                encoding = d['encoding']
+                enc_mat.append(encoding)
+
+        enc_mat_np = np.asarray(enc_mat)
+
+        for row in res:
+
+            filename = row[0]
+            filebase = os.path.basename(filename)
+            filedir  = os.path.dirname(filename)        
+
+            minified = filedir + "/@eaDir/" + filebase + "/SYNOPHOTO_THUMB_XL.jpg"
+        
+            print("Processing: " + filename)
+            image = face_recognition.load_image_file(str(minified))
+            current_encoding = face_recognition.face_encodings(image)
+            
+            result = face_recognition.face_distance(enc_mat_np, current_encoding)
+            result2 = face_recognition.compare_faces(enc_mat_np, current_encoding)
+            print(item + " : " + str(result2))
+                    
 f = FaceReader()
 #f.process_queue()
-f.load_models()
+
 #f.build_model()
+f.process_queue()
 del f
