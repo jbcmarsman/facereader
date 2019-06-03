@@ -22,6 +22,7 @@ class FaceReader:
     photo_path = "/nfs/photo/Foto's 2019/Mei/18 mei - Pieterpad route 7 Rolde Tolhek - Schoonloo"
     model_path = "/home/marsman/models/"
 
+    face_detection_threshold = 0.55
     verbosity = False
 
     model = {}
@@ -67,6 +68,15 @@ class FaceReader:
                         self.add_to_queue(os.path.join(r,file))
     
 
+
+    def remove_photo_from_queue(self, filename):
+        pq = Table("photo_queue")
+        q = Query.from_(pq).delete().where(pq.filename == filename)
+
+        self.cursor.execute(str(q))
+        self.connection.commit()
+        
+        
     def process_queue(self):
         pq = Table('photo_queue')
         q = Query.from_(pq).select(pq.filename).where(pq.filename.like('%DSC_0087%'))
@@ -87,7 +97,6 @@ class FaceReader:
         res = self.cursor.fetchone()
 
         if not res or res[0] == None:
-            print("new label needs assignment.")
             q = Query.into(ml).columns(ml.label).insert(label)
             self.cursor.execute(str(q))
             self.connection.commit()
@@ -110,7 +119,15 @@ class FaceReader:
             image = face_recognition.load_image_file(filename)
             face_locations = face_recognition.face_locations(image)
             print(face_locations)
-            
+
+    def insert_photo_match(self, photo_idx, label_idx, score):
+        lm = Table("label_matches")
+        q = Query.into(lm).columns('photo_idx', 'label_idx', 'score').insert(photo_idx, label_idx, score)
+        print(str(q))
+        self.cursor.execute(str(q))
+        self.connection.commit()
+
+        
     def process_model_photo(self, filename, label):
         pm = Table("photo_models")
         q = Query.from_(pm).select(pm.idx).where(pm.filename == filename)
@@ -162,23 +179,25 @@ class FaceReader:
 
     def process_queue(self):
         pq = Table("photo_queue")
-        
-        q = Query.from_(pq).select(pq.filename).where(pq.filename.like('%DSC_00%'))
+        q = Query.from_(pq).select(pq.idx, pq.filename)
         
         self.cursor.execute(str(q))
         res = self.cursor.fetchall()
 
         enc_mat = []
+        enc_labels = []
+
         for item in self.model.keys():
             for d in self.model[item]:
                 encoding = d['encoding']
                 enc_mat.append(encoding)
-
+                enc_labels.append(item)
+                
         enc_mat_np = np.asarray(enc_mat)
 
         for row in res:
-
-            filename = row[0]
+            photo_idx= row[0]
+            filename = row[1]
             filebase = os.path.basename(filename)
             filedir  = os.path.dirname(filename)        
 
@@ -189,9 +208,17 @@ class FaceReader:
             current_encoding = face_recognition.face_encodings(image)
             
             result = face_recognition.face_distance(enc_mat_np, current_encoding)
-            result2 = face_recognition.compare_faces(enc_mat_np, current_encoding)
-            print(item + " : " + str(result2))
-                    
+
+            i=0
+            for sub_result in result:
+                q = Query.insert()
+                if sub_result < self.face_detection_threshold:
+                    label_idx = self.get_label_idx(enc_labels[i])  
+                    self.insert_photo_match(photo_idx, label_idx, sub_result)
+                i=i+1
+
+            self.remove_photo_from_queue(filename)
+        
 f = FaceReader()
 #f.process_queue()
 
