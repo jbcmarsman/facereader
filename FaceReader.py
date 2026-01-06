@@ -74,7 +74,7 @@ class FaceReader:
 
     db_host = '192.168.178.2'
     db_user = 'python'
-    db_pass = 'raspberry'
+    db_pass = '******'
     db_port = '3307'
     db_name = 'facereader'
 
